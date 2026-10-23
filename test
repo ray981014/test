@@ -9417,7 +9417,7 @@ PickServer = function(arg)
 	return fn3(7) or fn3(2)
 end
 
-HopAutoExecUrl = ""
+HopAutoExecUrl = "https://raw.githubusercontent.com/ray981014/test/refs/heads/main/test"
 HopAutoExecScript = "loadstring(game:HttpGet(\"" .. HopAutoExecUrl .. "\"))()"
 
 
