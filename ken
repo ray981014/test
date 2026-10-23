@@ -9507,25 +9507,25 @@ HopServer = function(arg)
 		return
 	end
 
-	local now = tick()
+		local nowUnix = os.time()
+	local nowTick = tick()
 
-	-- 跨跳服冷卻：30 秒內不允許再跳（含新服剛載入時）
-	if now - GetLastHopAt() < HOP_COOLDOWN then
+	if nowUnix - GetLastHopAt() < HOP_COOLDOWN then
 		return
 	end
 
-
 	-- 防抖：45 秒后才允许再跳
-	if getgenv().IsServerHopping and getgenv().ServerHopAt and now - getgenv().ServerHopAt > 45 then
+	if getgenv().IsServerHopping and getgenv().ServerHopAt and nowTick - getgenv().ServerHopAt > 45 then
 		getgenv().IsServerHopping = false
 	end
 
 	if getgenv().IsServerHopping then
 		return
 	end
-		getgenv().IsServerHopping = true
-	getgenv().ServerHopAt = now
-	SetLastHopAt(now)   -- 記錄本次跳服時間（持久化）
+
+	getgenv().IsServerHopping = true
+	getgenv().ServerHopAt = tick()
+	SetLastHopAt(os.time())   -- 用 os.time 記錄，跨服一致
 
 	local v = FetchServerList()
 	if not v then
@@ -9596,6 +9596,7 @@ HopServer = function(arg)
 	)
 
 	Notify({ Title = "美團 HUB", Message = T("跳服中") .. " " .. v2, Duration = 3 })
+	SetLastHopAt(os.time())   -- 傳送前再確認一次時間
 	HopQueueAutoExec()
 
 	-- ===== 传送，并检测是否真的离开 =====
@@ -11092,17 +11093,15 @@ DealerNotFound = function(arg, arg2)
 	arg(arg2)
 
 	if _G.HopHakiSword then
-		if tick() - GetLastHopAt() >= HOP_COOLDOWN then
+		if os.time() - GetLastHopAt() >= HOP_COOLDOWN then
 			HopServer(true)
 		else
-			-- 冷卻中，等下一輪（0.5 秒後會再進來）
 			task.wait(1)
 		end
 	else
 		task.wait(2)
 	end
 end
-
 
 LegendarySwordFlow = function()
 	if not _G.AutoBuyLegendarySword then
@@ -11155,15 +11154,15 @@ HakiColorFlow = function()
 				HakiColorSetState(T("霸气颜色: 已购买, 跳服中"))
 				task.spawn(function()
 					task.wait(1)
-					if tick() - GetLastHopAt() >= HOP_COOLDOWN then
+					if os.time() - GetLastHopAt() >= HOP_COOLDOWN then
 						HopServer(true)
 					end
 				end)
 			end
-		end
+		end          -- ✅ 關閉 if tick() - v2 >= 1
 
 		return
-	end
+	end              -- ✅ 關閉 if v
 
 	DealerNotFound(HakiColorSetState, T("霸气颜色: 商人未刷出"))
 end
