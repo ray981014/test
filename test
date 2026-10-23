@@ -10162,47 +10162,142 @@ AutoFruitBowl = function()
 	end
 end
 
+-- ============================================================
+-- 見聞色（Ken）判定核心 —— 移植自 Auto Leviathan
+-- ============================================================
+KenNextAt = 0
+KenFailCount = 0
+KenNoBlurSince = nil
+
+KenChar = function()
+    local char = LocalPlayer.Character
+    if not char or not char.Parent then
+        return nil
+    end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health <= 0 then
+        return nil
+    end
+    return char
+end
+
+KenUnlocked = function(char)
+    local ok, tagged = pcall(function()
+        return CollectionService:HasTag(char, "Ken")
+    end)
+    return ok and tagged
+end
+
+KenDodgesLeft = function()
+    local ok, n = pcall(function()
+        local gui = LocalPlayer:FindFirstChild("PlayerGui")
+        local main = gui and gui:FindFirstChild("Main")
+        local list = main and main:FindFirstChild("BottomHUDList")
+        local btns = list and list:FindFirstChild("UniversalContextButtons")
+        local btn = btns and btns:FindFirstChild("BoundActionKen")
+        local lbl = btn and btn:FindFirstChild("DodgesLeftLabel")
+        if lbl and lbl.Text then
+            local match = lbl.Text:match("%d+")
+            if match then
+                return tonumber(match)
+            end
+        end
+        return nil
+    end)
+    return ok and n or nil
+end
+
+KenFire = function()
+    local remotes = RS:FindFirstChild("Remotes")
+    local commE = remotes and remotes:FindFirstChild("CommE")
+    if commE and commE:IsA("RemoteEvent") then
+        pcall(function()
+            commE:FireServer("Ken", true)
+        end)
+    end
+end
+
+-- ============================================================
+-- 刷見聞色：只有「次數 == 0」才跳服
+-- ============================================================
 FarmObservationFlow = function()
-	local str3 = Sea2 and "Marine Captain" or "Marine Commodore"
-	local v = FindMob(str3)
-	local humanoidRootPart = v and v:FindFirstChild("HumanoidRootPart") or FindSpawnPart(str3)
-	if not humanoidRootPart then
-		return
-	end
+    local str3 = Sea2 and "Marine Captain" or "Marine Commodore"
+    local v = FindMob(str3)
+    local spawnPart = v and v:FindFirstChild("HumanoidRootPart") or FindSpawnPart(str3)
+    if not spawnPart then
+        return
+    end
 
-	if not ObsBlurOn() then
-		SendKey("E")
-		task.wait()
+    local char = KenChar()
+    if not char then
+        KenNoBlurSince = nil
+        return
+    end
 
-		_tp(function()
-			if v and Attack.Alive(v) then
-				return v.HumanoidRootPart.CFrame * CFrame.new(0, 0, 50)
-			end
-			return humanoidRootPart.CFrame * CFrame.new(0, 60, 0)
-		end)
+    if not KenUnlocked(char) then
+        _G.FarmObservation = false
+        Notify({ Type = "warning", Title = "美團 HUB", Message = "該賬號未解鎖見聞色", Duration = 5 })
+        return
+    end
 
-		task.wait(3)
+    if ObsBlurOn() then
+        KenNoBlurSince = nil
+        KenNextAt = 0
+        KenFailCount = 0
 
-		if not ObsBlurOn() and _G.FarmObsHop then
-			HopServer(true)
-		end
+        repeat
+            task.wait()
+            if not _G.FarmObservation or not spawnPart.Parent then
+                return
+            end
+            _tp(function()
+                if v and Attack.Alive(v) then
+                    return v.HumanoidRootPart.CFrame * CFrame.new(0, 0, 3)
+                end
+                return spawnPart.CFrame * CFrame.new(0, 60, 0)
+            end)
+        until not _G.FarmObservation or not ObsBlurOn()
 
-		return
-	end
+        return
+    end
 
-	repeat
-		task.wait()
-		if not _G.FarmObservation or not humanoidRootPart.Parent then
-			return
-		end
+    local dodges = KenDodgesLeft()
 
-		_tp(function()
-			if v and Attack.Alive(v) then
-				return v.HumanoidRootPart.CFrame * CFrame.new(0, 0, 3)
-			end
-			return humanoidRootPart.CFrame * CFrame.new(0, 60, 0)
-		end)
-	until not _G.FarmObservation or not ObsBlurOn()
+    if dodges == 0 then
+        if _G.FarmObsHop then
+            Notify({ Title = "美團 HUB", Message = "見聞色次數已用完，跳服", Duration = 4 })
+            HopServer(true)
+        end
+        return
+    end
+
+    if os.clock() >= KenNextAt then
+        if KenFailCount >= 2 then
+            KenFailCount = 0
+            KenNextAt = os.clock() + 30
+            KenNoBlurSince = nil
+            return
+        end
+
+        KenFire()
+        KenFailCount = KenFailCount + 1
+        KenNextAt = os.clock() + 2.5
+
+        task.wait(0.5)
+        if ObsBlurOn() then
+            KenFailCount = 0
+            KenNoBlurSince = nil
+        end
+        return
+    end
+
+    if not KenNoBlurSince then
+        KenNoBlurSince = os.clock()
+    elseif os.clock() - KenNoBlurSince >= 15 then
+        KenNoBlurSince = nil
+        KenFailCount = 0
+        KenNextAt = os.clock() + 5
+    end
 end
 
 MobNameList = function()
