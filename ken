@@ -11115,12 +11115,21 @@ HakiColorFlow = function()
 				CommF:InvokeServer("ColorsDealer", "2")
 			end)
 
-			-- ===== 新增：购买成功后主动跳服 =====
+						-- ===== 購買成功後主動跳服（等滿 30 秒才跳）=====
 			if ok and _G.HopHakiSword and not HakiColorBoughtForHop then
 				HakiColorBoughtForHop = true
-				HakiColorSetState(T("霸气颜色: 已购买, 跳服中"))
 				task.spawn(function()
-					task.wait(1)
+					-- 計算距離上次跳服還差多少秒
+					local lastHop = getgenv().ServerHopAt or 0
+					local waitTime = 30 - (tick() - lastHop)
+					if waitTime < 0 then
+						waitTime = 0
+					end
+
+					HakiColorSetState(T("霸气颜色: 已购买, 等待 ") .. math.ceil(waitTime) .. T(" 秒后跳服"))
+					task.wait(waitTime + 0.5)
+
+					HakiColorSetState(T("霸气颜色: 已购买, 跳服中"))
 					HopServer(true)
 				end)
 			end
