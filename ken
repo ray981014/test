@@ -9387,100 +9387,94 @@ if not _G.JumpHistory then
 	_G.JumpHistory = {}
 end
 
-FetchServerList = function()
-	local region = _G.ServerRegion and ("&region=" .. tostring(_G.ServerRegion)) or ""
-	local url = "https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Desc&excludeFullGames=true&limit=100" .. region
+-- =========================================================
+-- 整合自 AutoBounty 的伺服器瀏覽器跳服邏輯 (無賞金版)
+-- =========================================================
 
-	-- 最多嘗試 3 次，避免被 Roblox 429 限流
-	for i = 1, 3 do
-		local ok, result = pcall(function()
-			return HttpService:JSONDecode(game:HttpGet(url))
+ServerHopCache = { List = nil, Fetching = false }
+
+-- 使用 __ServerBrowser 抓取伺服器列表 (自帶重試與分頁)
+local function FetchServerListBrowser(timeout)
+	local browser = RS:FindFirstChild("__ServerBrowser")
+	if not browser then return nil end
+	local servers, pending = {}, 0
+	for page = 1, 100 do
+		pending = pending + 1
+		task.delay(page * 0.02, function()
+			local ok, result = pcall(function() return browser:InvokeServer(page) end)
+			if not ok then
+				local tries = 0
+				repeat
+					task.wait(0.5)
+					tries = tries + 1
+					ok, result = pcall(function() return browser:InvokeServer(page) end)
+				until ok or tries >= 2
+			end
+			if ok and type(result) == "table" then
+				for job, info in pairs(result) do
+					if type(info) == "table" then
+						servers[job] = {
+							Region = tostring(info.Region or "Unknown"),
+							Count = tonumber(info.Count) or 0
+						}
+					end
+				end
+			end
+			pending = pending - 1
 		end)
+	end
+	local deadline = tick() + (timeout or 20)
+	while pending > 0 and tick() < deadline do task.wait(0.1) end
+	return servers
+end
 
-		if ok and type(result) == "table" and type(result.data) == "table" and #result.data > 0 then
-			return result.data
-		end
-		
-		-- 失敗就等 1.5 秒再試
-		if i < 3 then
-			task.wait(1.5)
+local function GetServerList()
+	if ServerHopCache.List then return ServerHopCache.List end
+	if ServerHopCache.Fetching then
+		local deadline = tick() + 25
+		while ServerHopCache.Fetching and tick() < deadline do task.wait(0.1) end
+		return ServerHopCache.List
+	end
+	ServerHopCache.Fetching = true
+	local ok, servers = pcall(FetchServerListBrowser, 20)
+	ServerHopCache.Fetching = false
+	if ok and type(servers) == "table" and next(servers) then
+		ServerHopCache.List = servers
+	end
+	return ServerHopCache.List
+end
+
+local function MatchRegion(info)
+	if not info then return false end
+	local want = tostring(_G.ServerRegion or "")
+	if want == "" or want == "Random" then return true end
+	return tostring(info.Region or ""):lower():find(want:lower(), 1, true) ~= nil
+end
+
+-- 只過濾人數 (3~10人，確保有空位且不會是單人服)
+local function MatchServer(info)
+	if not info then return false end
+	if not MatchRegion(info) then return false end
+	local count = tonumber(info.Count) or 0
+	return count >= 3 and count < 11
+end
+
+local function PickServerBrowser(servers)
+	local matches = {}
+	if type(servers) == "table" then
+		for job, info in pairs(servers) do
+			if job ~= game.JobId and MatchServer(info) then
+				table.insert(matches, { Job = job, Region = info.Region, Count = info.Count })
+			end
 		end
 	end
-
+	if #matches > 0 then
+		return matches[math.random(1, #matches)]
+	end
 	return nil
 end
 
-PickServer = function(arg)
-	local function fn3(arg2)
-		for _, v in ipairs(arg) do
-			local str3 = v.id and tostring(v.id)
-			local n3 = tonumber(v.playing) or 0
-			local n4 = tonumber(v.maxPlayers) or 12
-			if str3 and str3 ~= game.JobId and not table.find(_G.JumpHistory, str3) and n3 >= arg2 and n3 < n4 then
-				return str3
-			end
-		end
-
-		return nil
-	end
-
-	return fn3(7) or fn3(2)
-end
-
-HopAutoExecUrl = "https://raw.githubusercontent.com/ray981014/test/refs/heads/main/ken"
-HopAutoExecScript = "loadstring(game:HttpGet(\"" .. HopAutoExecUrl .. "\"))()"
-
-
-HopAutoExecPayload = function()
-	return HopAutoExecScript
-end
-
-HopQueueWarned = false
-HopQueuePending = false
-
-GetQueueOnTeleport = function()
-	return queue_on_teleport or queueonteleport or syn and syn.queue_on_teleport or fluxus and fluxus.queue_on_teleport
-end
-
-HopQueueAutoExec = function()
-	if _G.AutoExecuteHop ~= true then
-		return false
-	end
-
-	if HopQueuePending then
-		return false
-	end
-	local v = GetQueueOnTeleport()
-
-	if type(v) ~= "function" then
-		if not HopQueueWarned then
-			HopQueueWarned = true
-
-			Notify({
-				Type = "warning",
-				Title = "美團 HUB",
-				Message = T("换服自动执行: 执行器不支持 queue_on_teleport"),
-				Duration = 5,
-			})
-		end
-
-		return false
-	end
-
-	local ok2 = pcall(v, HopAutoExecPayload())
-
-	if ok2 then
-		HopQueuePending = true
-	end
-
-	return ok2
-end
-
-task.spawn(function()
-	task.wait(2)
-	HopQueueAutoExec()
-end)
-
+-- 替換原本的 HopServer
 HopServer = function(arg)
 	local flag3 = not arg
 	if flag3 and not EliteFeatureOn() then
@@ -9490,7 +9484,7 @@ HopServer = function(arg)
 
 	local now = tick()
 
-	-- 防抖：45 秒后才允许再跳（保留你的逻辑）
+	-- 防抖：10 秒內不重複跳
 	if getgenv().IsServerHopping and getgenv().ServerHopAt and now - getgenv().ServerHopAt > 10 then
 		getgenv().IsServerHopping = false
 	end
@@ -9501,52 +9495,29 @@ HopServer = function(arg)
 	getgenv().IsServerHopping = true
 	getgenv().ServerHopAt = now
 
-	local v = FetchServerList()
-	if not v then
+	-- 使用 __ServerBrowser 抓取
+	local servers = GetServerList()
+	if not servers then
 		getgenv().IsServerHopping = false
 		Notify({ Type = "bad", Title = "美團 HUB", Message = T("未取到服务器列表"), Duration = 3 })
 		return
 	end
 
-local function pick(level)
-    for _, srv in ipairs(v) do
-        local id = srv.id and tostring(srv.id)
-        local playing = tonumber(srv.playing) or 0
-        local maxP = tonumber(srv.maxPlayers) or 12
-        local okCount
-        if level == 2 then
-            okCount = playing >= 7 and playing < maxP - 1
-        elseif level == 1 then
-            okCount = playing >= 2 and playing < maxP - 1
-        else
-    okCount = playing < maxP - 1   -- 至少留 1 個空位
-end
-        if id
-            and id ~= game.JobId
-            and not table.find(_G.JumpHistory, id)
-            and okCount
-        then
-            return id
-        end
-    end
-    return nil
-end
+	local target = PickServerBrowser(servers)
+	if not target then
+		-- 抓不到符合條件的，清空快取，放寬條件再試一次
+		ServerHopCache.List = nil
+		servers = GetServerList()
+		target = PickServerBrowser(servers)
+	end
 
-local v2 = pick(2) or pick(1) or pick(0)
-if not v2 then
-    -- 清歷史時保留最後 2 個，避免反覆挑同一個滿人服
-    local keep = {}
-    for i = math.max(1, #_G.JumpHistory - 1), #_G.JumpHistory do
-        keep[#keep + 1] = _G.JumpHistory[i]
-    end
-    _G.JumpHistory = keep
-    v2 = pick(1) or pick(0)
-end
-if not v2 then
-    getgenv().IsServerHopping = false
-    Notify({ Type = "warning", Title = "美團 HUB", Message = T("没有找到可用的服务器"), Duration = 5 })
-    return
-end
+	if not target then
+		getgenv().IsServerHopping = false
+		Notify({ Type = "warning", Title = "美團 HUB", Message = T("没有找到可用的服务器"), Duration = 5 })
+		return
+	end
+
+	local v2 = target.Job
 
 	if flag3 and not EliteFeatureOn() then
 		getgenv().IsServerHopping = false
@@ -9558,7 +9529,7 @@ end
 		table.remove(_G.JumpHistory, 1)
 	end
 
-	-- ===== 記錄這次跳服是哪個功能觸發的，跳過去後還原 =====
+	-- 記錄這次跳服是哪個功能觸發的
 	getgenv().PendingHopFeature = (
 		_G.FarmEliteH and "FarmEliteH" or
 		_G.HopFindBerry and "HopFindBerry" or
@@ -9569,27 +9540,24 @@ end
 		nil
 	)
 
-	Notify({ Title = "美團 HUB", Message = T("跳服中") .. " " .. v2, Duration = 3 })
+	Notify({ Title = "美團 HUB", Message = T("跳服中") .. " (" .. target.Count .. "人) " .. target.Region, Duration = 3 })
 	HopQueueAutoExec()
 
-
-	-- ===== 传送，并检测是否真的离开 =====
+	-- 傳送
 	local sent = pcall(function()
-		local serverBrowser = RS:FindFirstChild("__ServerBrowser") or RS:WaitForChild("__ServerBrowser", 3)
-		if serverBrowser then
-			serverBrowser:InvokeServer("teleport", v2)
+		local browser = RS:FindFirstChild("__ServerBrowser")
+		if browser then
+			browser:InvokeServer("teleport", v2)
 		else
 			TeleportService:TeleportToPlaceInstance(game.PlaceId, v2, LocalPlayer)
 		end
 	end)
 
 	if not sent then
-		-- 移除坏 id，允许后续重挑
 		local idx = table.find(_G.JumpHistory, v2)
 		if idx then table.remove(_G.JumpHistory, idx) end
 		getgenv().IsServerHopping = false
 		Notify({ Type = "bad", Title = "美團 HUB", Message = T("跳服传送失败"), Duration = 4 })
-		-- 立即尝试再跳（递归一跳，防止卡死）
 		task.spawn(function()
 			task.wait(2)
 			HopServer(arg)
@@ -9597,33 +9565,33 @@ end
 		return
 	end
 
--- 守護：10 秒內還留在原服 → 視為失敗，等 10 秒再重跳
-local startJobId = game.JobId
-local startPlaceId = game.PlaceId
+	-- 守護：10 秒內還留在原服 → 視為失敗，等 10 秒再重跳
+	local startJobId = game.JobId
+	local startPlaceId = game.PlaceId
 
-task.spawn(function()
-    local deadline = tick() + 10
-    while tick() < deadline do
-        task.wait(1)
-        if game.JobId ~= startJobId
-            or game.PlaceId ~= startPlaceId
-            or not LocalPlayer.Character
-            or not LocalPlayer.Character.Parent
-        then
-            return
-        end
-    end
+	task.spawn(function()
+		local deadline = tick() + 10
+		while tick() < deadline do
+			task.wait(1)
+			if game.JobId ~= startJobId
+				or game.PlaceId ~= startPlaceId
+				or not LocalPlayer.Character
+				or not LocalPlayer.Character.Parent
+			then
+				return
+			end
+		end
 
-    local idx = table.find(_G.JumpHistory, v2)
-    if idx then table.remove(_G.JumpHistory, idx) end
+		local idx = table.find(_G.JumpHistory, v2)
+		if idx then table.remove(_G.JumpHistory, idx) end
 
-    Notify({ Type = "bad", Title = "美團 HUB", Message = "傳送失敗，10 秒後重試", Duration = 4 })
+		Notify({ Type = "bad", Title = "美團 HUB", Message = "傳送失敗，10 秒後重試", Duration = 4 })
 
-    task.wait(10)
+		task.wait(10)
 
-    getgenv().IsServerHopping = false
-    HopServer(arg)
-end)
+		getgenv().IsServerHopping = false
+		HopServer(arg)
+	end)
 end
 
 EliteLastState = ""
