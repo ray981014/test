@@ -9481,7 +9481,7 @@ HopServer = function(arg)
 	local now = tick()
 
 	-- 防抖：45 秒后才允许再跳（保留你的逻辑）
-	if getgenv().IsServerHopping and getgenv().ServerHopAt and now - getgenv().ServerHopAt > 45 then
+	if getgenv().IsServerHopping and getgenv().ServerHopAt and now - getgenv().ServerHopAt > 10 then
 		getgenv().IsServerHopping = false
 	end
 
@@ -9509,8 +9509,8 @@ local function pick(level)
         elseif level == 1 then
             okCount = playing >= 2 and playing < maxP - 1
         else
-            okCount = playing < maxP
-        end
+    okCount = playing < maxP - 1   -- 至少留 1 個空位
+end
         if id
             and id ~= game.JobId
             and not table.find(_G.JumpHistory, id)
@@ -9587,15 +9587,14 @@ end
 		return
 	end
 
-	-- 守护：发起传送后 12 秒内如果还留在原服（JobId 没变），视为失败，继续跳
-	local startJobId = game.JobId
-	local startPlaceId = game.PlaceId
+-- 守護：10 秒內還留在原服 → 視為失敗，等 10 秒再重跳
+local startJobId = game.JobId
+local startPlaceId = game.PlaceId
 
 task.spawn(function()
-    local deadline = tick() + 25
+    local deadline = tick() + 10
     while tick() < deadline do
         task.wait(1)
-        -- 已成功離開：JobId 變了、PlaceId 變了、或角色被卸載
         if game.JobId ~= startJobId
             or game.PlaceId ~= startPlaceId
             or not LocalPlayer.Character
@@ -9604,12 +9603,15 @@ task.spawn(function()
             return
         end
     end
-    -- 25 秒還留在原地 → 視為失敗，移除該 id 後繼續跳
+
     local idx = table.find(_G.JumpHistory, v2)
     if idx then table.remove(_G.JumpHistory, idx) end
+
+    Notify({ Type = "bad", Title = "美團 HUB", Message = "傳送失敗，10 秒後重試", Duration = 4 })
+
+    task.wait(10)
+
     getgenv().IsServerHopping = false
-    Notify({ Type = "bad", Title = "美團 HUB", Message = "傳送失敗(可能滿人)，繼續跳服", Duration = 4 })
-    task.wait(1)
     HopServer(arg)
 end)
 end
