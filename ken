@@ -15,7 +15,6 @@ end
 local lib = loadstring(game:HttpGet("https://raw.githubusercontent.com/ray981014/test/refs/heads/main/velaricX"))()
 local lib2 = loadstring(game:HttpGet("https://raw.githubusercontent.com/ray981014/test/refs/heads/main/velaricX2"))()
 local lib3 = loadstring(game:HttpGet("https://raw.githubusercontent.com/ray981014/test/refs/heads/main/velaricX3"))()
-lib:RegisterIcons(lib3)
 lib2:RegisterIcons(lib3)
 
 local function fn2(arg)
@@ -9440,6 +9439,216 @@ GetQueueOnTeleport = function()
 	return queue_on_teleport or queueonteleport or syn and syn.queue_on_teleport or fluxus and fluxus.queue_on_teleport
 end
 
+-- =========================================================
+-- Fallback 跳服（取不到伺服器列表時使用，移植自 Auto Bounty 的 ServerBrowser 跳服）
+-- =========================================================
+FallbackHopRunning = false
+
+FallbackParseServerInfo = function(text)
+	if type(text) ~= "string" or text == "" then
+		return nil
+	end
+	local region = text:match("Region:%s*(.-)%s*%-%s*Players:") or text:match("Region:%s*(.-)%s*$")
+	local cur, maxP = text:match("Players:%s*(%d+)%s*/%s*(%d+)")
+	local bountyText = text:match("Bounty:%s*([%d,]+)")
+	if not cur or not maxP or not bountyText then
+		return nil
+	end
+	local bounty = tonumber((bountyText:gsub(",", "")))
+	if not bounty then
+		return nil
+	end
+	return {
+		Region = region or "Unknown",
+		Players = tonumber(cur),
+		MaxPlayers = tonumber(maxP),
+		Bounty = bounty,
+	}
+end
+
+FallbackServerAllowed = function(info)
+	if not info then return false end
+	local minP = tonumber(_G.HopMinPlayers) or 0
+	local maxP = tonumber(_G.HopMaxPlayers) or 12
+	local minB = tonumber(_G.HopMinBounty) or 0
+	local maxB = tonumber(_G.HopMaxBounty) or math.huge
+	if info.Players < minP or info.Players > maxP then return false end
+	if info.Bounty < minB or info.Bounty > maxB then return false end
+	local regionTarget = _G.ServerRegion
+	if regionTarget and regionTarget ~= "" then
+		local a = tostring(regionTarget):lower()
+		local b = tostring(info.Region):lower()
+		if not b:find(a, 1, true) then return false end
+	end
+	return true
+end
+
+FallbackHop = function()
+	if FallbackHopRunning then return end
+	FallbackHopRunning = true
+
+	task.spawn(function()
+		local ok, err = pcall(function()
+			local currentJobId = game.JobId
+			local triedJobs = {}
+			local ServerBrowserRemote = RS:FindFirstChild("__ServerBrowser")
+
+			if not ServerBrowserRemote then
+				Notify({ Type = "bad", Title = "美團 HUB", Message = "Fallback 跳服: 找不到 __ServerBrowser", Duration = 4 })
+				return
+			end
+
+			-- 優先嘗試遠端直接拿列表
+			local directServers = nil
+			for _, method in ipairs({ "getServers", "fetchServers", "getServerList", "fetch", "servers", "searchServers" }) do
+				local ok2, result = pcall(function()
+					return ServerBrowserRemote:InvokeServer(method)
+				end)
+				if ok2 and type(result) == "table" then
+					local arr = result.Servers or result.ServerList or result.Data or result
+					if type(arr) == "table" then
+						local parsed = {}
+						for _, s in ipairs(arr) do
+							if type(s) == "table" then
+								local jobId = s.JobId or s.Job or s.id or s.teleportData
+								if type(jobId) == "string" and jobId:find("-", 1, true) then
+									parsed[#parsed + 1] = {
+										JobId = tostring(jobId),
+										Region = tostring(s.Region or s.RegionName or s.region or ""),
+										Players = tonumber(s.Players or s.PlayerCount or s.CurrentPlayers or s.currentPlayers) or 0,
+										MaxPlayers = tonumber(s.MaxPlayers or s.MaximumPlayers or s.maxPlayers) or 0,
+										Bounty = tonumber(s.Bounty or s.ServerBounty or s.bounty) or 0,
+									}
+								end
+							end
+						end
+						if #parsed > 0 then
+							directServers = parsed
+							break
+						end
+					end
+				end
+			end
+
+			-- 沒拿到就開隱藏 GUI 讀
+			local useHiddenGui = false
+			local Inside = nil
+			if not directServers then
+				local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
+				local serverBrowser = playerGui and playerGui:FindFirstChild("ServerBrowser")
+				if not serverBrowser then
+					Notify({ Type = "bad", Title = "美團 HUB", Message = "Fallback 跳服: 沒有 ServerBrowser UI", Duration = 4 })
+					return
+				end
+
+				useHiddenGui = true
+				getgenv().ServerHopHiddenGui = true
+
+				pcall(function()
+					if serverBrowser:FindFirstChild("Frame") then
+						serverBrowser.Frame.Visible = false
+					end
+				end)
+				serverBrowser.Enabled = true
+
+				local Filters = serverBrowser.Frame:FindFirstChild("Filters")
+				local SearchRegion = Filters and Filters:FindFirstChild("SearchRegion")
+				local TextBox = SearchRegion and SearchRegion:FindFirstChild("TextBox")
+				if TextBox then
+					TextBox.Text = _G.ServerRegion or "Singapore"
+				end
+
+				local ScrollingFrame = serverBrowser.Frame.ScrollingFrame
+				local FakeScroll = serverBrowser.Frame.FakeScroll
+				Inside = FakeScroll and FakeScroll:FindFirstChild("Inside")
+
+				task.spawn(function()
+					while FallbackHopRunning do
+						if ScrollingFrame then
+							ScrollingFrame.CanvasPosition = Vector2.new(0, math.random(100, 7000))
+						end
+						task.wait(0.3)
+					end
+				end)
+			end
+
+			task.wait(0.5)
+
+			local startAt = tick()
+			while tick() - startAt < 20 do
+				if not FallbackHopRunning then return end
+
+				local candidate = nil
+				if directServers then
+					for _, s in ipairs(directServers) do
+						if s.JobId ~= currentJobId and not triedJobs[s.JobId] and FallbackServerAllowed(s) then
+							candidate = s.JobId
+							break
+						end
+					end
+				elseif useHiddenGui and Inside then
+					for _, template in ipairs(Inside:GetChildren()) do
+						if template.Name == "Template" then
+							local joinButton = template:FindFirstChild("Join")
+							local textLabel = template:FindFirstChild("TextLabel")
+							local info = textLabel and FallbackParseServerInfo(textLabel.Text)
+							if joinButton and info and FallbackServerAllowed(info) then
+								local job = joinButton:GetAttribute("Job")
+								if job and tostring(job):find("-", 1, true) then
+									job = tostring(job)
+									if job ~= currentJobId and not triedJobs[job] then
+										candidate = job
+										break
+									end
+								end
+							end
+						end
+					end
+				end
+
+				if candidate then
+					triedJobs[candidate] = true
+					Notify({ Title = "美團 HUB", Message = "Fallback 跳服中 " .. candidate, Duration = 3 })
+					pcall(function()
+						ServerBrowserRemote:InvokeServer("teleport", candidate)
+					end)
+					table.insert(_G.JumpHistory, candidate)
+					if #_G.JumpHistory > 100 then
+						table.remove(_G.JumpHistory, 1)
+					end
+					return
+				end
+
+				task.wait(1)
+			end
+
+			Notify({ Type = "warning", Title = "美團 HUB", Message = "Fallback 跳服: 找不到符合條件的伺服器", Duration = 5 })
+		end)
+
+		if not ok then
+			warn("[FallbackHop] " .. tostring(err))
+		end
+
+		if getgenv().ServerHopHiddenGui then
+			getgenv().ServerHopHiddenGui = nil
+			local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
+			local serverBrowser = playerGui and playerGui:FindFirstChild("ServerBrowser")
+			if serverBrowser then
+				pcall(function()
+					serverBrowser.Enabled = false
+					if serverBrowser:FindFirstChild("Frame") then
+						serverBrowser.Frame.Visible = true
+					end
+				end)
+			end
+		end
+
+		FallbackHopRunning = false
+		getgenv().IsServerHopping = false
+	end)
+end
+
+
 HopQueueAutoExec = function()
 	if _G.AutoExecuteHop ~= true then
 		return false
@@ -9499,10 +9708,10 @@ HopServer = function(arg)
 	getgenv().IsServerHopping = true
 	getgenv().ServerHopAt = now
 
-	local v = FetchServerList()
+		local v = FetchServerList()
 	if not v then
-		getgenv().IsServerHopping = false
-		Notify({ Type = "bad", Title = "美團 HUB", Message = T("未取到服务器列表"), Duration = 3 })
+		Notify({ Type = "warning", Title = "美團 HUB", Message = T("未取到服务器列表") .. " → 使用 Fallback 跳服", Duration = 3 })
+		FallbackHop()
 		return
 	end
 
@@ -9540,9 +9749,9 @@ HopServer = function(arg)
 		_G.JumpHistory = keep
 		v2 = pick(1) or pick(0)
 	end
-	if not v2 then
-		getgenv().IsServerHopping = false
-		Notify({ Type = "warning", Title = "美團 HUB", Message = T("没有找到可用的服务器"), Duration = 5 })
+		if not v2 then
+		Notify({ Type = "warning", Title = "美團 HUB", Message = T("没有找到可用的服务器") .. " → 使用 Fallback 跳服", Duration = 5 })
+		FallbackHop()
 		return
 	end
 
@@ -9569,6 +9778,7 @@ HopServer = function(arg)
 
 	Notify({ Title = "美團 HUB", Message = T("跳服中") .. " " .. v2, Duration = 3 })
 	HopQueueAutoExec()
+
 
 	-- ===== 传送，并检测是否真的离开 =====
 	local sent = pcall(function()
@@ -11115,21 +11325,12 @@ HakiColorFlow = function()
 				CommF:InvokeServer("ColorsDealer", "2")
 			end)
 
-						-- ===== 購買成功後主動跳服（等滿 30 秒才跳）=====
+			-- ===== 新增：购买成功后主动跳服 =====
 			if ok and _G.HopHakiSword and not HakiColorBoughtForHop then
 				HakiColorBoughtForHop = true
+				HakiColorSetState(T("霸气颜色: 已购买, 跳服中"))
 				task.spawn(function()
-					-- 計算距離上次跳服還差多少秒
-					local lastHop = getgenv().ServerHopAt or 0
-					local waitTime = 30 - (tick() - lastHop)
-					if waitTime < 0 then
-						waitTime = 0
-					end
-
-					HakiColorSetState(T("霸气颜色: 已购买, 等待 ") .. math.ceil(waitTime) .. T(" 秒后跳服"))
-					task.wait(waitTime + 0.5)
-
-					HakiColorSetState(T("霸气颜色: 已购买, 跳服中"))
+					task.wait(1)
 					HopServer(true)
 				end)
 			end
