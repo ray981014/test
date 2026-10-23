@@ -9387,14 +9387,35 @@ if not _G.JumpHistory then
 	_G.JumpHistory = {}
 end
 
--- =========================================================
--- 整合自 AutoBounty 的伺服器瀏覽器跳服邏輯 (無賞金版)
--- 方案 B：完全照搬第二份的 FetchServerList + HopServer
--- =========================================================
-
 if not _G.JumpHistory then
 	_G.JumpHistory = {}
 end
+
+-- ===== 跳服冷卻持久化 =====
+local HopCooldownFile = "MeituanHUB_Config/last_hop.txt"
+local HOP_COOLDOWN = 30
+
+GetLastHopAt = function()
+	local ok, s = pcall(function()
+		if typeof(isfile) == "function" and isfile(HopCooldownFile) then
+			return tonumber(readfile(HopCooldownFile)) or 0
+		end
+		return 0
+	end)
+	return ok and s or 0
+end
+
+SetLastHopAt = function(t)
+	pcall(function()
+		if typeof(isfolder) == "function" and typeof(makefolder) == "function" and not isfolder("MeituanHUB_Config") then
+			makefolder("MeituanHUB_Config")
+		end
+		if typeof(writefile) == "function" then
+			writefile(HopCooldownFile, tostring(t))
+		end
+	end)
+end
+-- ===== 冷卻持久化結束 =====
 
 FetchServerList = function()
 	local str3 = "https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Desc&excludeFullGames=true&limit=100"
@@ -9488,6 +9509,12 @@ HopServer = function(arg)
 
 	local now = tick()
 
+	-- 跨跳服冷卻：30 秒內不允許再跳（含新服剛載入時）
+	if now - GetLastHopAt() < HOP_COOLDOWN then
+		return
+	end
+
+
 	-- 防抖：45 秒后才允许再跳
 	if getgenv().IsServerHopping and getgenv().ServerHopAt and now - getgenv().ServerHopAt > 45 then
 		getgenv().IsServerHopping = false
@@ -9496,8 +9523,9 @@ HopServer = function(arg)
 	if getgenv().IsServerHopping then
 		return
 	end
-	getgenv().IsServerHopping = true
+		getgenv().IsServerHopping = true
 	getgenv().ServerHopAt = now
+	SetLastHopAt(now)   -- 記錄本次跳服時間（持久化）
 
 	local v = FetchServerList()
 	if not v then
@@ -11064,11 +11092,17 @@ DealerNotFound = function(arg, arg2)
 	arg(arg2)
 
 	if _G.HopHakiSword then
-		HopServer(true)
+		if tick() - GetLastHopAt() >= HOP_COOLDOWN then
+			HopServer(true)
+		else
+			-- 冷卻中，等下一輪（0.5 秒後會再進來）
+			task.wait(1)
+		end
 	else
 		task.wait(2)
 	end
 end
+
 
 LegendarySwordFlow = function()
 	if not _G.AutoBuyLegendarySword then
@@ -11115,13 +11149,15 @@ HakiColorFlow = function()
 				CommF:InvokeServer("ColorsDealer", "2")
 			end)
 
-			-- ===== 新增：购买成功后主动跳服 =====
+			-- ===== 购买成功后主动跳服（受 30 秒冷卻限制）=====
 			if ok and _G.HopHakiSword and not HakiColorBoughtForHop then
 				HakiColorBoughtForHop = true
 				HakiColorSetState(T("霸气颜色: 已购买, 跳服中"))
 				task.spawn(function()
 					task.wait(1)
-					HopServer(true)
+					if tick() - GetLastHopAt() >= HOP_COOLDOWN then
+						HopServer(true)
+					end
 				end)
 			end
 		end
@@ -11131,7 +11167,6 @@ HakiColorFlow = function()
 
 	DealerNotFound(HakiColorSetState, T("霸气颜色: 商人未刷出"))
 end
-
 task.spawn(function()
 	while task.wait(0.5) do
 		if _G.AutoBuyLegendarySword then
