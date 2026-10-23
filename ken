@@ -9388,15 +9388,25 @@ if not _G.JumpHistory then
 end
 
 FetchServerList = function()
-	local str3 = "https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Desc&excludeFullGames=true&limit=100"
+	local region = _G.ServerRegion and ("&region=" .. tostring(_G.ServerRegion)) or ""
+	local url = "https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Desc&excludeFullGames=true&limit=100" .. region
 
-	local ok2, result2 = pcall(function()
-		return HttpService:JSONDecode(game:HttpGet(str3))
-	end)
+	-- 最多嘗試 3 次，避免被 Roblox 429 限流
+	for i = 1, 3 do
+		local ok, result = pcall(function()
+			return HttpService:JSONDecode(game:HttpGet(url))
+		end)
 
-	if ok2 and type(result2) == "table" and type(result2.data) == "table" then
-		return result2.data
+		if ok and type(result) == "table" and type(result.data) == "table" and #result.data > 0 then
+			return result.data
+		end
+		
+		-- 失敗就等 1.5 秒再試
+		if i < 3 then
+			task.wait(1.5)
+		end
 	end
+
 	return nil
 end
 
