@@ -656,7 +656,7 @@ _G.AutoGacha = _G.AutoGacha or false
 _G.AutoStoreFruit = _G.AutoStoreFruit or false
 _G.SelectedBoat = _G.SelectedBoat or "Guardian"
 _G.DangerSc = _G.DangerSc or "Lv 1"
-_G.BoatHeight = tonumber(_G.BoatHeight) or 30
+_G.BoatHeight = tonumber(_G.BoatHeight) or 150
 _G.AutoSail = _G.AutoSail or false
 _G.AutoSeaEvent = _G.AutoSeaEvent or false
 _G.TpKitsune = _G.TpKitsune or false
@@ -5009,28 +5009,64 @@ Dojo.SailOut = function()
 		local smartTeleport = _G.SmartTeleport
 		_G.SmartTeleport = false
 		SailNoclipActive = true
+
+		-- 1. 先檢查是否坐在船裡，如果是，強制下船
+		local hum = GetHumanoid()
+		if hum and (hum.Sit or hum.SeatPart ~= nil) then
+			ForceUnseat(2)
+		end
+
 		local v = GetOwnBoat()
 
+		-- 2. 如果沒有船，飛去買船
 		if not v then
-			if not Dojo.At(Dojo.BoatBuyCF.Position, 8) then
-				_tp(Dojo.BoatBuyCF)
+			if not Dojo.At(Dojo.BoatBuyCF.Position, 15) then
+				-- 使用平滑飛行前往買船點，避免卡住
+				_tp(Dojo.BoatBuyCF, function()
+					return not _G.AutoQuestDojo
+				end)
 			else
 				v = BuyBoatAndWait(true)
 			end
 		end
 
 		if v then
+			-- 3. 上船
 			if BoardBoat(v, 20, false, true) then
-				if GetHRP() then
-					local cframe9 = CFrame.new(Dojo.RoughSeaCF.Position.X, _G.BoatHeight, Dojo.RoughSeaCF.Position.Z)
+				local hrp = GetHRP()
+				if hrp then
+					local targetPos = Dojo.RoughSeaCF.Position
+					local lockY = _G.BoatHeight or 150 -- 鎖定高度，防止撞石頭
+					
+					-- 4. 核心改動：手動控制船，強制鎖定 Y 軸高度並平滑航行
+					local startTime = tick()
+					while _G.AutoQuestDojo and tick() - startTime < 30 do
+						local hrpNow = GetHRP()
+						local humNow = GetHumanoid()
+						if not hrpNow or not humNow or not humNow.Sit then break end
 
-					pcall(function()
-						local v2 = SailEngineSpeed
+						local pos = hrpNow.Position
+						local flat = Vector3.new(targetPos.X - pos.X, 0, targetPos.Z - pos.Z)
+						local dist = flat.Magnitude
 
-						SailToCF(GetBoatSeat(v), cframe9, v2, function()
-							return _G.AutoQuestDojo
+						-- 抵達目的地 (距離小於 40)
+						if dist <= 40 then
+							break
+						end
+
+						-- 計算方向並移動 (將船鎖定在目標高度)
+						local dir = flat.Unit
+						local speed = SailEngineSpeed or 150
+						local step = math.min(dist, speed * (1/60))
+						local np = pos + dir * step
+
+						pcall(function()
+							hrpNow.CFrame = CFrame.lookAt(Vector3.new(np.X, lockY, np.Z), Vector3.new(np.X, lockY, np.Z - 1), Vector3.new(0, 1, 0))
+							hrpNow.AssemblyLinearVelocity = Vector3.zero
 						end)
-					end)
+
+						task.wait()
+					end
 				end
 
 				ForceUnseat(3)
