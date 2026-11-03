@@ -764,6 +764,7 @@ ConfigFolder = "MeituanHUB_Config"
 ConfigKeys = {
 	"FastAttack",
 	"GunM1",
+    "FruitM1",
 	"BringMobs",
 	"AutoHaki",
 	"AutoAim",
@@ -1664,6 +1665,129 @@ EquipWeapon = function(arg)
 		end
 	end
 end
+
+-- ================= 果實 M1 =================
+_G.FruitM1 = _G.FruitM1 or false
+local FRUIT_M1_RANGE = 450
+local FRUIT_M1_MIN_INTERVAL = 0.05
+local lastFruitM1At = 0
+
+local function FruitM1ToolOf()
+    local function scan(container)
+        if not container then return nil end
+        for _, tool in ipairs(container:GetChildren()) do
+            if tool:IsA("Tool") and tool.ToolTip == "Blox Fruit" then
+                return tool
+            end
+        end
+    end
+    return scan(LocalPlayer.Character) or scan(LocalPlayer:FindFirstChild("Backpack"))
+end
+
+local function FruitM1TargetPart(model, root)
+    if not model or not model.Parent then return nil end
+    for _, name in ipairs({ "Leviathan Segment", "Hitbox", "Engine" }) do
+        local part = model:FindFirstChild(name)
+        if part and part:IsA("BasePart") then return part end
+    end
+    return root
+        or model:FindFirstChild("HumanoidRootPart")
+        or model:FindFirstChild("RootPart")
+        or model.PrimaryPart
+        or model:FindFirstChild("Head")
+end
+
+local function FruitM1NearestEnemy()
+    local hrp = GetHRP()
+    if not hrp then return nil end
+    local myPos = hrp.Position
+    local best, bestDist = nil, FRUIT_M1_RANGE
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer then
+            local char = plr.Character
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+            local root = char and char:FindFirstChild("HumanoidRootPart")
+            if hum and hum.Health > 0 and root then
+                local d = (root.Position - myPos).Magnitude
+                if d < bestDist then best, bestDist = char, d end
+            end
+        end
+    end
+
+    local enemies = Workspace:FindFirstChild("Enemies")
+    if enemies then
+        for _, model in ipairs(enemies:GetChildren()) do
+            local hum = model:FindFirstChildOfClass("Humanoid")
+            local root = model:FindFirstChild("HumanoidRootPart") or model:FindFirstChild("Head")
+            if hum and hum.Health > 0 and root then
+                local d = (root.Position - myPos).Magnitude
+                if d < bestDist then best, bestDist = model, d end
+            end
+        end
+    end
+    return best
+end
+
+local function DoFruitM1(model)
+    local char = LocalPlayer.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not model or not model.Parent or not root or not hum
+        or hum.Health <= 0 or hum.Sit or hum.SeatPart then return end
+
+    local target = FruitM1TargetPart(model)
+    if not target or not target.Parent then return end
+
+    local delta = target.Position - root.Position
+    if delta.Magnitude < 0.001 or delta.Magnitude > FRUIT_M1_RANGE then return end
+
+    local tool = FruitM1ToolOf()
+    if not tool then return end
+
+    local now = os.clock()
+    if now - lastFruitM1At < FRUIT_M1_MIN_INTERVAL then return end
+    lastFruitM1At = now
+
+    local remote = tool:FindFirstChild("LeftClickRemote")
+    if not remote then
+        local event = tool:FindFirstChild("RemoteEvent")
+        if event and event:IsA("RemoteEvent") then
+            event:FireServer(target.Position)
+            return
+        end
+        local fn = tool:FindFirstChild("RemoteFunction")
+        if fn and fn:IsA("RemoteFunction") then
+            fn:InvokeServer("TAP")
+        end
+        return
+    end
+
+    if tool.Name == "Mammoth-Mammoth" then
+        remote:FireServer(target.Position)
+        return
+    end
+
+    local dir = delta.Unit
+    remote:FireServer(Vector3.new(dir.X, dir.Y, dir.Z), 1, true)
+end
+
+task.spawn(function()
+    while true do
+        task.wait(0.1)
+        if _G.FruitM1 then
+            local char = LocalPlayer.Character
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+            if hum and hum.Health > 0 and not hum.Sit and hum.SeatPart == nil then
+                local target = FruitM1NearestEnemy()
+                if target then
+                    pcall(DoFruitM1, target)
+                end
+            end
+        end
+    end
+end)
+
 
 TWEEN_PART_NAME = "OptimizedTweenPart"
 
@@ -15156,6 +15280,16 @@ buildUI = function(arg)
 			end
 		end,
 	})
+
+    SettingsCombatTab:AddToggle({
+    Title = "果实M1攻击",
+    Description = "自动对最近目标释放果实普攻",
+    Default = _G.FruitM1,
+    Icon = "Dragon (East)-Dragon (East)1",
+    Callback = function(fruitM1)
+        _G.FruitM1 = fruitM1
+    end,
+})
 
 	SettingsCombatTab:AddToggle({
 		Title = "聚怪",
